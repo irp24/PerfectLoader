@@ -167,6 +167,39 @@ static nk_uint log_scroll_x = 0;
 static nk_uint log_scroll_y = 0;
 
 /* ---------------------------------------------------------------
+ *  Window name lookup
+ *  Enumerates all top-level windows, matches on PID, and returns
+ *  the title of the first visible window found (e.g. "AssaultCube"
+ *  for ac_client.exe).  Returns "" when nothing is found.
+ * --------------------------------------------------------------- */
+typedef struct { DWORD pid; char title[MAX_PATH]; } _WndSearchCtx;
+
+static BOOL CALLBACK _enum_wnd_cb(HWND hwnd, LPARAM lp)
+{
+    _WndSearchCtx* ctx = (_WndSearchCtx*)lp;
+    DWORD wndPid = 0;
+    GetWindowThreadProcessId(hwnd, &wndPid);
+    if (wndPid == ctx->pid && IsWindowVisible(hwnd) &&
+        GetWindowTextA(hwnd, ctx->title, sizeof(ctx->title)) > 0)
+        return FALSE; /* stop — found a titled, visible window */
+    return TRUE;
+}
+
+static const char* findWindowNameFromPath(const char* procName)
+{
+    static char result[MAX_PATH];
+    _WndSearchCtx ctx;
+    DWORD pid = find_pid_by_name(procName);
+    result[0] = '\0';
+    if (!pid) return result;
+    ctx.pid   = pid;
+    ctx.title[0] = '\0';
+    EnumWindows(_enum_wnd_cb, (LPARAM)&ctx);
+    memcpy(result, ctx.title, sizeof(result));
+    return result;
+}
+
+/* ---------------------------------------------------------------
  *  Do the injection
  * --------------------------------------------------------------- */
 static void do_inject(void)
@@ -204,6 +237,7 @@ static void do_inject(void)
     PLRing3.fixRelocations = opt_fix_reloc;
     PLRing3.createRemoteThread = opt_remote_thread;
     PLRing3.hTargetProcess = hProc;
+    PLRing3.windowName = findWindowNameFromPath(process_name);
 
     /* hook our GUI logger in */
     pl_log = gui_log;

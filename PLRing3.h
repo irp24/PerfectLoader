@@ -96,6 +96,7 @@ static const char* PL_ResultStrings[] = {
 struct _PLRing3 {
     char                libraryPath[MAX_PATH];  // fixed buffer, safe to edit from GUI
     char                exportedMain[256];       // for SetWindowsHookEx
+    LPCSTR              windowName;       // title of the target process's main window
 
     PL_InjectionMethod  method;
     PL_IATMode          iatMode;
@@ -292,7 +293,7 @@ static PL_Result _SetWindowsHookEx_inject(void)
         return PL_ERR_HOOK_PROC;
     }
 
-    HWND hWnd = FindWindowA(NULL, "AssaultCube");
+    HWND hWnd = FindWindowA(NULL, PLRing3.windowName);
 
     DWORD pid = 0;
     DWORD tid = GetWindowThreadProcessId(hWnd, &pid);
