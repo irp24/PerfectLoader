@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <commdlg.h>
-#include <tlhelp32.h>
 
  /* ---------------------------------------------------------------
   *  Nuklear config
@@ -94,41 +93,58 @@ static int       proc_sel = -1;
 
 static void refresh_process_list(void)
 {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32W pe;
+    _ResolveZwApi();
     proc_count = 0;
-    proc_sel = -1;
-    if (snap == INVALID_HANDLE_VALUE) return;
-    pe.dwSize = sizeof(pe);
-    if (!Process32FirstW(snap, &pe)) { CloseHandle(snap); return; }
-    do {
-        if (proc_count >= 2048) break;
-        proc_list[proc_count].pid = pe.th32ProcessID;
-        WideCharToMultiByte(CP_ACP, 0, pe.szExeFile, -1,
-            proc_list[proc_count].name, sizeof(proc_list[proc_count].name), NULL, NULL);
-        proc_count++;
-    } while (Process32NextW(snap, &pe));
-    CloseHandle(snap);
+    proc_sel   = -1;
+    PBYTE buf = _QuerySystemProcessInfo();
+    if (!buf) return;
+    PL_SYSTEM_PROCESS_INFORMATION* entry = (PL_SYSTEM_PROCESS_INFORMATION*)buf;
+    for (;;) {
+        if (proc_count < 2048) {
+            proc_list[proc_count].pid = (DWORD)(ULONG_PTR)entry->UniqueProcessId;
+            if (entry->ImageName.Buffer && entry->ImageName.Length > 0) {
+                WideCharToMultiByte(CP_ACP, 0, entry->ImageName.Buffer,
+                    entry->ImageName.Length / sizeof(WCHAR),
+                    proc_list[proc_count].name,
+                    sizeof(proc_list[proc_count].name) - 1, NULL, NULL);
+                proc_list[proc_count].name[sizeof(proc_list[proc_count].name) - 1] = '\0';
+            } else {
+                strcpy(proc_list[proc_count].name, "[System]");
+            }
+            proc_count++;
+        }
+        if (!entry->NextEntryOffset) break;
+        entry = (PL_SYSTEM_PROCESS_INFORMATION*)((PBYTE)entry + entry->NextEntryOffset);
+    }
+    _ZwFreeLocal(buf);
 }
 
 static DWORD find_pid_by_name(const char* name)
 {
+    _ResolveZwApi();
     WCHAR wname[260];
-    HANDLE snap; PROCESSENTRY32W pe;
     MultiByteToWideChar(CP_ACP, 0, name, -1, wname, 260);
-    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return 0;
-    pe.dwSize = sizeof(pe);
-    if (!Process32FirstW(snap, &pe)) { CloseHandle(snap); return 0; }
-    do {
-        if (_wcsicmp(pe.szExeFile, wname) == 0) {
-            DWORD pid = pe.th32ProcessID;
-            CloseHandle(snap);
-            return pid;
+    PBYTE buf = _QuerySystemProcessInfo();
+    if (!buf) return 0;
+    DWORD found = 0;
+    PL_SYSTEM_PROCESS_INFORMATION* entry = (PL_SYSTEM_PROCESS_INFORMATION*)buf;
+    for (;;) {
+        if (entry->ImageName.Buffer && entry->ImageName.Length > 0) {
+            WCHAR entryName[260] = { 0 };
+            USHORT copyLen = entry->ImageName.Length;
+            if (copyLen > (USHORT)(sizeof(entryName) - sizeof(WCHAR)))
+                copyLen = (USHORT)(sizeof(entryName) - sizeof(WCHAR));
+            memcpy(entryName, entry->ImageName.Buffer, copyLen);
+            if (_wcsicmp(entryName, wname) == 0) {
+                found = (DWORD)(ULONG_PTR)entry->UniqueProcessId;
+                break;
+            }
         }
-    } while (Process32NextW(snap, &pe));
-    CloseHandle(snap);
-    return 0;
+        if (!entry->NextEntryOffset) break;
+        entry = (PL_SYSTEM_PROCESS_INFORMATION*)((PBYTE)entry + entry->NextEntryOffset);
+    }
+    _ZwFreeLocal(buf);
+    return found;
 }
 
 /* ---------------------------------------------------------------
@@ -160,7 +176,8 @@ static int  method_sel = PL_METHOD_MANUAL_MAP;
 static int  iat_mode_sel = PL_IAT_LOADLIBRARY;
 static int  opt_fix_iat = 1;
 static int  opt_fix_reloc = 1;
-static int  opt_remote_thread = 1;
+static int  exec_method_sel = PL_EXEC_NT_CREATE_THREAD_EX;
+static int  alloc_method_sel = PL_ALLOC_ZW_ALLOCATE;
 
 /* Log scroll offsets — persisted across frames */
 static nk_uint log_scroll_x = 0;
@@ -200,13 +217,87 @@ static const char* findWindowNameFromPath(const char* procName)
 }
 
 /* ---------------------------------------------------------------
+ *  Shellcode text parser
+ *  Recognised token formats (freely mixed, any separator between):
+ *    \xNN  — C/Python escape   e.g. "\x90\xCC"
+ *    0xNN  — C hex literal     e.g. "0x90, 0xCC"
+ *    NN    — bare hex pair     e.g. "90 CC" or "90,CC"
+ *  Returns a heap-allocated BYTE array; caller must free().
+ *  *outLen is set to the number of bytes parsed (0 on failure).
+ * --------------------------------------------------------------- */
+static int _is_hex(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static BYTE _hex_val(char c)
+{
+    if (c >= '0' && c <= '9') return (BYTE)(c - '0');
+    if (c >= 'a' && c <= 'f') return (BYTE)(c - 'a' + 10);
+    return (BYTE)(c - 'A' + 10);
+}
+
+static BYTE* parse_shellcode(const char* src, SIZE_T* outLen)
+{
+    SIZE_T cap = 512, len = 0;
+    BYTE* buf = (BYTE*)malloc(cap);
+    const char* p = src;
+    *outLen = 0;
+    if (!buf) return NULL;
+
+    while (*p)
+    {
+        /* skip whitespace and common separators */
+        while (*p == ' ' || *p == '\t' || *p == ',' || *p == ';' ||
+               *p == '"' || *p == '\'' || *p == '{' || *p == '}' ||
+               *p == '\r' || *p == '\n')
+            p++;
+        if (!*p) break;
+
+        /* \xNN */
+        if (p[0] == '\\' && (p[1] == 'x' || p[1] == 'X') &&
+            _is_hex(p[2]) && _is_hex(p[3]))
+        {
+            if (len >= cap) { cap *= 2; buf = (BYTE*)realloc(buf, cap); if (!buf) return NULL; }
+            buf[len++] = (_hex_val(p[2]) << 4) | _hex_val(p[3]);
+            p += 4;
+            continue;
+        }
+
+        /* 0xNN */
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') &&
+            _is_hex(p[2]) && _is_hex(p[3]))
+        {
+            if (len >= cap) { cap *= 2; buf = (BYTE*)realloc(buf, cap); if (!buf) return NULL; }
+            buf[len++] = (_hex_val(p[2]) << 4) | _hex_val(p[3]);
+            p += 4;
+            continue;
+        }
+
+        /* bare hex pair NN */
+        if (_is_hex(p[0]) && _is_hex(p[1]))
+        {
+            if (len >= cap) { cap *= 2; buf = (BYTE*)realloc(buf, cap); if (!buf) return NULL; }
+            buf[len++] = (_hex_val(p[0]) << 4) | _hex_val(p[1]);
+            p += 2;
+            continue;
+        }
+
+        p++; /* unrecognised character — skip */
+    }
+
+    *outLen = len;
+    return buf;
+}
+
+/* ---------------------------------------------------------------
  *  Do the injection
  * --------------------------------------------------------------- */
 static void do_inject(void)
 {
     DWORD pid;
 
-    if (dll_path[0] == '\0') {
+    if (method_sel != PL_METHOD_SHELLCODE && dll_path[0] == '\0') {
         gui_log("[!] No DLL path set\n");
         return;
     }
@@ -235,15 +326,31 @@ static void do_inject(void)
     PLRing3.iatMode = (PL_IATMode)iat_mode_sel;
     PLRing3.fixIAT = opt_fix_iat;
     PLRing3.fixRelocations = opt_fix_reloc;
-    PLRing3.createRemoteThread = opt_remote_thread;
+    PLRing3.execMethod = (PL_ExecMethod)exec_method_sel;
+    PLRing3.allocMethod = (PL_AllocMethod)alloc_method_sel;
     PLRing3.hTargetProcess = hProc;
     PLRing3.windowName = findWindowNameFromPath(process_name);
+
+    if (method_sel == PL_METHOD_SHELLCODE) {
+        PLRing3.shellcodeBytes = parse_shellcode(shellcode, &PLRing3.shellcodeLen);
+        if (!PLRing3.shellcodeBytes || PLRing3.shellcodeLen == 0) {
+            gui_log("[!] No valid bytes in shellcode input\n");
+            CloseHandle(hProc);
+            return;
+        }
+        gui_log("[*] Parsed %lu shellcode bytes\n", (unsigned long)PLRing3.shellcodeLen);
+    }
 
     /* hook our GUI logger in */
     pl_log = gui_log;
 
     gui_log("[*] Injecting via %s...\n", PL_MethodNames[method_sel]);
     PL_Result res = inject();
+
+    if (PLRing3.shellcodeBytes) {
+        free(PLRing3.shellcodeBytes);
+        PLRing3.shellcodeBytes = NULL;
+    }
 
     if (res == PL_OK)
         gui_log("[+] Success!\n");
@@ -509,7 +616,21 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     }
                 }
 
-                nk_checkbox_label(ctx, "CreateRemoteThread", &opt_remote_thread);
+                nk_layout_row_dynamic(ctx, 18, 1);
+                nk_label(ctx, "Execution Method:", NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ctx, 24, 2);
+                for (int i = 0; i < PL_EXEC_COUNT; i++) {
+                    if (nk_option_label(ctx, PL_ExecMethodNames[i], exec_method_sel == i))
+                        exec_method_sel = i;
+                }
+
+                nk_layout_row_dynamic(ctx, 18, 1);
+                nk_label(ctx, "Allocation Method:", NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ctx, 24, PL_ALLOC_COUNT);
+                for (int i = 0; i < PL_ALLOC_COUNT; i++) {
+                    if (nk_option_label(ctx, PL_AllocMethodNames[i], alloc_method_sel == i))
+                        alloc_method_sel = i;
+                }
 
             }
 
@@ -532,6 +653,20 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 nk_layout_row_dynamic(ctx, 28, 1);
                 nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD,
                     shellcode, sizeof(shellcode), nk_filter_default);
+                nk_layout_row_dynamic(ctx, 18, 1);
+                nk_label(ctx, "Execution Method:", NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ctx, 24, 2);
+                for (int i = 0; i < PL_EXEC_COUNT; i++) {
+                    if (nk_option_label(ctx, PL_ExecMethodNames[i], exec_method_sel == i))
+                        exec_method_sel = i;
+                }
+                nk_layout_row_dynamic(ctx, 18, 1);
+                nk_label(ctx, "Allocation Method:", NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ctx, 24, PL_ALLOC_COUNT);
+                for (int i = 0; i < PL_ALLOC_COUNT; i++) {
+                    if (nk_option_label(ctx, PL_AllocMethodNames[i], alloc_method_sel == i))
+                        alloc_method_sel = i;
+                }
             }
 
             nk_layout_row_dynamic(ctx, 8, 1);
