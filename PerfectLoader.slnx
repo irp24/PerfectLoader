@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="PerfectLoader.vcxproj" Id="555cb0d0-1d2c-4d3c-9025-2e405f68302b" />
+</Solution>
