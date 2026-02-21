@@ -320,7 +320,68 @@ void do_inject()
 
     pl_log = gui_log;
     gui_log("[*] Injecting via %s...\n", PL_MethodNames[method_sel]);
-    PL_Result res = inject();
+
+    if (!PLRing3.hTargetProcess)
+    {
+        PLLOG("[-] No target process handle\n");
+        return PL_ERR_NO_PROCESS;
+    }
+
+    PL_Result  res = PL_OK;
+    HANDLE     hSection = NULL;
+    LPVOID     raw = NULL, img = NULL, remoteBuf = NULL;
+    PIMAGE_NT_HEADERS nth = NULL;
+
+    /* read DLL from disk */
+    WCHAR wPath[MAX_PATH];
+    MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wPath, MAX_PATH);
+    UNICODE_STRING ntPath = { 0 };
+    RtlDosPathNameToNtPathName_U(wPath, &ntPath, NULL, NULL);
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &ntPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    IO_STATUS_BLOCK iosb;
+    HANDLE hFile = NULL;
+    NTSTATUS nts = ZwCreateFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    RtlFreeUnicodeString(&ntPath);
+
+    gui_log("[+] Opened: %s\n", PLRing3.libraryPath);
+
+    PL_FILE_STANDARD_INFORMATION fsi;
+    IO_STATUS_BLOCK ioQ;
+    nts = ZwQueryInformationFile(hFile, &ioQ, &fsi, sizeof(fsi), PL_FileStandardInformation);
+
+    DWORD fileSize = (DWORD)fsi.EndOfFile.LowPart;
+    gui_log("[+] File size: %lu bytes\n", fileSize);
+
+    raw = ZwAllocLocal((SIZE_T)fileSize, PAGE_READWRITE);
+
+    IO_STATUS_BLOCK ioR;
+    LARGE_INTEGER off = { 0 };
+    nts = ZwReadFile(hFile, NULL, NULL, NULL, &ioR, raw, fileSize, &off, NULL);
+    ZwClose(hFile);
+
+    gui_log("[+] Read %lu bytes\n", (DWORD)ioR.Information);
+
+    /* validate PE */
+    {
+        IMAGE_DOS_HEADER* dh = (IMAGE_DOS_HEADER*)raw;
+        if (dh->e_magic != IMAGE_DOS_SIGNATURE)
+        {
+            gui_log("[-] Not a valid PE (bad DOS signature)\n");
+            return;
+        }
+        nth = (PIMAGE_NT_HEADERS)((uintptr_t)raw + dh->e_lfanew);
+        if (nth->Signature != IMAGE_NT_SIGNATURE)
+        {
+            gui_log("[-] Not a valid PE (bad NT signature)\n");
+            return;
+        }
+    }
+    gui_log("[+] ImageBase=0x%IX  EP=0x%08X  Sections=%u  SizeOfImage=0x%X\n",
+        (uintptr_t)nth->OptionalHeader.ImageBase, nth->OptionalHeader.AddressOfEntryPoint,
+        nth->FileHeader.NumberOfSections, nth->OptionalHeader.SizeOfImage);
+
+     res = inject(hSection, raw, remoteBuf, nth);
 
     if (PLRing3.shellcodeBytes) 
     { 

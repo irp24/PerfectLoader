@@ -264,6 +264,94 @@ typedef struct _LDR_ENTRY_FULL
  BOOLEAN(NTAPI* RtlDosPathNameToNtPathName_U)(PCWSTR, PUNICODE_STRING, PWSTR*, PVOID);
  NTSTATUS(NTAPI* ZwQuerySystemInformation)(ULONG, PVOID, ULONG, PULONG);
 
+ //general utilites
+static void ResolveZwApi()
+ {
+     static BOOL resolved = FALSE;
+     if (resolved) return;
+
+     HMODULE nt = GetModuleHandleA("ntdll.dll");
+
+     ZwClose = GetProcAddress(nt, "ZwClose");
+     ZwAllocateVirtualMemory = GetProcAddress(nt, "ZwAllocateVirtualMemory");
+     ZwFreeVirtualMemory = GetProcAddress(nt, "ZwFreeVirtualMemory");
+     ZwReadVirtualMemory = GetProcAddress(nt, "ZwReadVirtualMemory");
+     ZwWriteVirtualMemory = GetProcAddress(nt, "ZwWriteVirtualMemory");
+     ZwQueryInformationProcess = GetProcAddress(nt, "ZwQueryInformationProcess");
+     ZwCreateThreadEx = GetProcAddress(nt, "ZwCreateThreadEx");
+     ZwOpenThread = GetProcAddress(nt, "ZwOpenThread");
+     ZwSuspendThread = GetProcAddress(nt, "ZwSuspendThread");
+     ZwResumeThread = GetProcAddress(nt, "ZwResumeThread");
+     ZwGetContextThread = GetProcAddress(nt, "ZwGetContextThread");
+     ZwSetContextThread = GetProcAddress(nt, "ZwSetContextThread");
+     ZwQueueApcThread = GetProcAddress(nt, "ZwQueueApcThread");
+     ZwCreateFile = GetProcAddress(nt, "ZwCreateFile");
+     ZwReadFile = GetProcAddress(nt, "ZwReadFile");
+     ZwQueryInformationFile = GetProcAddress(nt, "ZwQueryInformationFile");
+     ZwCreateSection = GetProcAddress(nt, "ZwCreateSection");
+     ZwMapViewOfSection = GetProcAddress(nt, "ZwMapViewOfSection");
+     ZwUnmapViewOfSection = GetProcAddress(nt, "ZwUnmapViewOfSection");
+     ZwQueryVirtualMemory = GetProcAddress(nt, "ZwQueryVirtualMemory");
+     RtlDosPathNameToNtPathName_U = GetProcAddress(nt, "RtlDosPathNameToNtPathName_U");
+     ZwQuerySystemInformation = GetProcAddress(nt, "ZwQuerySystemInformation");
+
+     resolved = TRUE;
+     PLLOG("[+] Zw API resolved from ntdll\n");
+ }
+
+static PVOID ZwAllocLocal(SIZE_T size, ULONG protect)
+ {
+     PVOID base = NULL;
+     SIZE_T sz = size;
+     NTSTATUS st = ZwAllocateVirtualMemory(
+         NtCurrentProcess(), &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, protect);
+     return NT_SUCCESS(st) ? base : NULL;
+ }
+
+static void ZwFreeLocal(PVOID ptr)
+ {
+     SIZE_T sz = 0;
+     ZwFreeVirtualMemory(NtCurrentProcess(), &ptr, &sz, MEM_RELEASE);
+ }
+
+static PVOID ZwAllocRemote(HANDLE hProcess, SIZE_T size, ULONG protect)
+ {
+     PVOID base = NULL;
+     SIZE_T sz = size;
+     NTSTATUS st = ZwAllocateVirtualMemory(
+         hProcess, &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, protect);
+     return NT_SUCCESS(st) ? base : NULL;
+ }
+
+static PVOID QuerySystemProcessInfo()
+ {
+     ULONG bufSize = 0x80000;
+     PVOID buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
+     while (TRUE)
+     {
+         ULONG retLen = 0;
+         NTSTATUS st = ZwQuerySystemInformation(PL_SystemProcessInformation, buf, bufSize, &retLen);
+         if (NT_SUCCESS(st))
+         {
+             return buf;
+         }
+         if (st == STATUS_INFO_LENGTH_MISMATCH)
+         {
+             ZwFreeLocal(buf);
+             bufSize = retLen + 0x1000;
+             buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
+         }
+         else
+         {
+             ZwFreeLocal(buf);
+             return NULL;
+         }
+     }
+ }
+
+
  /* ---- public API ---- */
 
-PL_Result inject();
+PL_Result inject(
+    HANDLE hSection, LPVOID raw,
+    PVOID remoteBuf, PIMAGE_NT_HEADERS nth);

@@ -2,92 +2,6 @@
 
 struct _PLRing3 PLRing3;
 
-//general utilites
-void ResolveZwApi()
-{
-    static BOOL resolved = FALSE;
-    if (resolved) return;
-
-    HMODULE nt = GetModuleHandleA("ntdll.dll");
-
-    ZwClose = GetProcAddress(nt, "ZwClose");
-    ZwAllocateVirtualMemory = GetProcAddress(nt, "ZwAllocateVirtualMemory");
-    ZwFreeVirtualMemory = GetProcAddress(nt, "ZwFreeVirtualMemory");
-    ZwReadVirtualMemory = GetProcAddress(nt, "ZwReadVirtualMemory");
-    ZwWriteVirtualMemory = GetProcAddress(nt, "ZwWriteVirtualMemory");
-    ZwQueryInformationProcess = GetProcAddress(nt, "ZwQueryInformationProcess");
-    ZwCreateThreadEx = GetProcAddress(nt, "ZwCreateThreadEx");
-    ZwOpenThread = GetProcAddress(nt, "ZwOpenThread");
-    ZwSuspendThread = GetProcAddress(nt, "ZwSuspendThread");
-    ZwResumeThread = GetProcAddress(nt, "ZwResumeThread");
-    ZwGetContextThread = GetProcAddress(nt, "ZwGetContextThread");
-    ZwSetContextThread = GetProcAddress(nt, "ZwSetContextThread");
-    ZwQueueApcThread = GetProcAddress(nt, "ZwQueueApcThread");
-    ZwCreateFile = GetProcAddress(nt, "ZwCreateFile");
-    ZwReadFile = GetProcAddress(nt, "ZwReadFile");
-    ZwQueryInformationFile = GetProcAddress(nt, "ZwQueryInformationFile");
-    ZwCreateSection = GetProcAddress(nt, "ZwCreateSection");
-    ZwMapViewOfSection = GetProcAddress(nt, "ZwMapViewOfSection");
-    ZwUnmapViewOfSection = GetProcAddress(nt, "ZwUnmapViewOfSection");
-    ZwQueryVirtualMemory = GetProcAddress(nt, "ZwQueryVirtualMemory");
-    RtlDosPathNameToNtPathName_U = GetProcAddress(nt, "RtlDosPathNameToNtPathName_U");
-    ZwQuerySystemInformation = GetProcAddress(nt, "ZwQuerySystemInformation");
-
-    resolved = TRUE;
-    PLLOG("[+] Zw API resolved from ntdll\n");
-}
-
-PVOID ZwAllocLocal(SIZE_T size, ULONG protect)
-{
-    PVOID base = NULL;
-    SIZE_T sz = size;
-    NTSTATUS st = ZwAllocateVirtualMemory(
-        NtCurrentProcess(), &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, protect);
-    return NT_SUCCESS(st) ? base : NULL;
-}
-
-void ZwFreeLocal(PVOID ptr)
-{
-    SIZE_T sz = 0;
-    ZwFreeVirtualMemory(NtCurrentProcess(), &ptr, &sz, MEM_RELEASE);
-}
-
-PVOID ZwAllocRemote(HANDLE hProcess, SIZE_T size, ULONG protect)
-{
-    PVOID base = NULL;
-    SIZE_T sz = size;
-    NTSTATUS st = ZwAllocateVirtualMemory(
-        hProcess, &base, 0, &sz, MEM_COMMIT | MEM_RESERVE, protect);
-    return NT_SUCCESS(st) ? base : NULL;
-}
-
-PVOID QuerySystemProcessInfo()
-{
-    ULONG bufSize = 0x80000;
-    PVOID buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
-    while (TRUE) 
-    {
-        ULONG retLen = 0;
-        NTSTATUS st = ZwQuerySystemInformation(PL_SystemProcessInformation, buf, bufSize, &retLen);
-        if (NT_SUCCESS(st)) 
-        {
-            return buf;
-        }
-        if (st == STATUS_INFO_LENGTH_MISMATCH) 
-        {
-            ZwFreeLocal(buf);
-            bufSize = retLen + 0x1000;
-            buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
-        } 
-        else 
-        {
-            ZwFreeLocal(buf);
-            return NULL;
-        }
-    }
-}
-
-
 //mapping utilites
 PVOID HuntRWXCave(HANDLE hProcess, SIZE_T need)
 {
@@ -240,7 +154,7 @@ PL_Result ExecuteRemote(PVOID ep)
     {
         PLLOG("[*] ZwCreateThreadEx at %p\n", ep);
         HANDLE ht = NULL;
-        NTSTATUS st = ZwCreateThreadEx(&ht, THREAD_ALL_ACCESS, NULL, PLRing3.hTargetProcess, ep, NULL, 0, 0, 0x1000, 0x100000, NULL);
+        ZwCreateThreadEx(&ht, THREAD_ALL_ACCESS, NULL, PLRing3.hTargetProcess, ep, NULL, 0, 0, 0x1000, 0x100000, NULL);
 
         PLLOG("[+] Thread created via ZwCreateThreadEx (handle=%p)\n", ht);
         ZwClose(ht);
@@ -383,72 +297,10 @@ PL_Result SetWindowsHookExInject()
     return PL_OK;
 }
 
-PL_Result ManualMapInject()
+PL_Result ManualMapInject(HANDLE hSection, LPVOID raw, PVOID remoteBuf, PIMAGE_NT_HEADERS nth)
 {
-    if (!PLRing3.hTargetProcess) 
-    {
-        PLLOG("[-] No target process handle\n");
-        return PL_ERR_NO_PROCESS;
-    }
-
-    PL_Result  res = PL_OK;
-    HANDLE     hSection = NULL;
-    LPVOID     raw = NULL, img = NULL, remoteBuf = NULL;
-    PIMAGE_NT_HEADERS nth = NULL;
-
-    /* read DLL from disk */
-    WCHAR wPath[MAX_PATH];
-    MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wPath, MAX_PATH);
-    UNICODE_STRING ntPath = {0};
-    RtlDosPathNameToNtPathName_U(wPath, &ntPath, NULL, NULL);
-    OBJECT_ATTRIBUTES oa;
-    InitializeObjectAttributes(&oa, &ntPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    IO_STATUS_BLOCK iosb;
-    HANDLE hFile = NULL;
-    NTSTATUS nts = ZwCreateFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
-    RtlFreeUnicodeString(&ntPath);
-
-    PLLOG("[+] Opened: %s\n", PLRing3.libraryPath);
-
-    PL_FILE_STANDARD_INFORMATION fsi;
-    IO_STATUS_BLOCK ioQ;
-    nts = ZwQueryInformationFile(hFile, &ioQ, &fsi, sizeof(fsi), PL_FileStandardInformation);
-
-    DWORD fileSize = (DWORD)fsi.EndOfFile.LowPart;
-    PLLOG("[+] File size: %lu bytes\n", fileSize);
-
-    raw = ZwAllocLocal((SIZE_T)fileSize, PAGE_READWRITE);
-
-    IO_STATUS_BLOCK ioR;
-    LARGE_INTEGER off = {0};
-    nts = ZwReadFile(hFile, NULL, NULL, NULL, &ioR, raw, fileSize, &off, NULL);
-    ZwClose(hFile);
-
-    PLLOG("[+] Read %lu bytes\n", (DWORD)ioR.Information);
-
-    /* validate PE */
-    {
-        IMAGE_DOS_HEADER* dh = (IMAGE_DOS_HEADER*)raw;
-        if (dh->e_magic != IMAGE_DOS_SIGNATURE) 
-        { 
-            PLLOG("[-] Not a valid PE (bad DOS signature)\n");
-            res = PL_ERR_PE_INVALID;
-            goto done;
-        }
-        nth = (PIMAGE_NT_HEADERS)((uintptr_t)raw + dh->e_lfanew);
-        if (nth->Signature != IMAGE_NT_SIGNATURE)
-        { 
-            PLLOG("[-] Not a valid PE (bad NT signature)\n");
-            res = PL_ERR_PE_INVALID;
-            goto done;
-        }
-    }
-    PLLOG("[+] ImageBase=0x%IX  EP=0x%08X  Sections=%u  SizeOfImage=0x%X\n",
-        (uintptr_t)nth->OptionalHeader.ImageBase, nth->OptionalHeader.AddressOfEntryPoint,
-        nth->FileHeader.NumberOfSections, nth->OptionalHeader.SizeOfImage);
-
 	// map sections to local memory
-    img = ZwAllocLocal((SIZE_T)nth->OptionalHeader.SizeOfImage, PAGE_READWRITE);
+    PVOID img = ZwAllocLocal((SIZE_T)nth->OptionalHeader.SizeOfImage, PAGE_READWRITE);
 
     memcpy(img, raw, nth->OptionalHeader.SizeOfHeaders);
     {
@@ -473,10 +325,10 @@ PL_Result ManualMapInject()
     {
         LARGE_INTEGER sz;
         sz.QuadPart = nth->OptionalHeader.SizeOfImage;
-        nts = ZwCreateSection(&hSection, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
+        ZwCreateSection(&hSection, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
 
         SIZE_T viewSz = 0;
-        nts = ZwMapViewOfSection(hSection, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &viewSz, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
+        ZwMapViewOfSection(hSection, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &viewSz, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
 
     } 
     else if (PLRing3.allocMethod == PL_ALLOC_RWX_HUNT)
@@ -485,7 +337,7 @@ PL_Result ManualMapInject()
         if (!remoteBuf)
         {
             PLLOG("[-] No suitable RWX cave found for 0x%X bytes\n", nth->OptionalHeader.SizeOfImage); 
-            res = PL_ERR_ALLOC_REMOTE;
+            PL_Result res = PL_ERR_ALLOC_REMOTE;
             goto done;
         }
     }
@@ -577,7 +429,7 @@ PL_Result ManualMapInject()
             if (!hm)
             { 
                 PLLOG("  [-] %s not in remote PEB\n", mod);
-                res = PL_ERR_IAT_MODULE_NOT_FOUND;
+                PL_Result res = PL_ERR_IAT_MODULE_NOT_FOUND;
                 goto done;
             }
             PLLOG("  [+] %s -> %p\n", mod, hm);
@@ -591,7 +443,7 @@ PL_Result ManualMapInject()
                 if (!fn)
                 {
                     PLLOG("    [-] Function not found in %s\n", mod);
-                    res = PL_ERR_IAT_FUNC_NOT_FOUND;
+                    PL_Result res = PL_ERR_IAT_FUNC_NOT_FOUND;
                     goto done;
                 }
                 thunk->u1.Function = (ULONG_PTR)fn;
@@ -605,7 +457,7 @@ PL_Result ManualMapInject()
     {
         PVOID lv = NULL;
         SIZE_T lvs = 0;
-        nts = ZwMapViewOfSection(hSection, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, ViewUnmap, 0, PAGE_READWRITE);
+        ZwMapViewOfSection(hSection, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, ViewUnmap, 0, PAGE_READWRITE);
 
         memcpy(lv, img, nth->OptionalHeader.SizeOfImage);
         ZwUnmapViewOfSection(NtCurrentProcess(), lv);
@@ -615,7 +467,7 @@ PL_Result ManualMapInject()
     }
     else 
     {
-        nts = ZwWriteVirtualMemory(PLRing3.hTargetProcess, remoteBuf, img, nth->OptionalHeader.SizeOfImage, NULL);
+        ZwWriteVirtualMemory(PLRing3.hTargetProcess, remoteBuf, img, nth->OptionalHeader.SizeOfImage, NULL);
 
         PLLOG("[+] Written to remote process\n");
     }
@@ -623,7 +475,7 @@ PL_Result ManualMapInject()
     DWORD epRVA = nth->OptionalHeader.AddressOfEntryPoint;
     ZwFreeLocal(img);
     img = NULL;
-    res = ExecuteRemote((LPVOID)((uintptr_t)remoteBuf + epRVA));
+    PL_Result res = ExecuteRemote((LPVOID)((uintptr_t)remoteBuf + epRVA));
 
 done:
     if (raw) ZwFreeLocal(raw);
@@ -652,14 +504,14 @@ PL_Result ShellcodeInject()
         LARGE_INTEGER sz;
         sz.QuadPart = (LONGLONG)PLRing3.shellcodeLen;
         HANDLE sec = NULL;
-        NTSTATUS st = ZwCreateSection(&sec, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
+        ZwCreateSection(&sec, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
 
         PVOID lv = NULL;
         SIZE_T lvs = 0;
-        st = ZwMapViewOfSection(sec, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, 2, 0, PAGE_READWRITE);
+        ZwMapViewOfSection(sec, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, 2, 0, PAGE_READWRITE);
 
         SIZE_T rvs = 0;
-        st = ZwMapViewOfSection(sec, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &rvs, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
+        ZwMapViewOfSection(sec, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &rvs, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
 
         memcpy(lv, PLRing3.shellcodeBytes, PLRing3.shellcodeLen);
         ZwUnmapViewOfSection(NtCurrentProcess(), lv);
@@ -690,7 +542,7 @@ PL_Result ShellcodeInject()
 
 
 //public api to call from main
-PL_Result inject()
+PL_Result inject(HANDLE hSection, LPVOID raw, PVOID remoteBuf, PIMAGE_NT_HEADERS nth)
 {
     ResolveZwApi();
     if (PLRing3.method != PL_METHOD_SHELLCODE && PLRing3.libraryPath[0] == '\0')
@@ -710,7 +562,7 @@ PL_Result inject()
         
         case PL_METHOD_MANUAL_MAP:    
         {
-            res = ManualMapInject();
+            res = ManualMapInject(hSection, raw, remoteBuf, nth);
             break;
         }
         
