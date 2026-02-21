@@ -16,12 +16,52 @@
 #include "nuklear_d3d11.h"
 #include "PLRing3.h"
 
-/*
- * Log buffer — PLLOG writes here via gui_log when pl_log is set
- */
+// Constants
+#define WINDOW_WIDTH       640
+#define WINDOW_HEIGHT      640
+#define MAX_VERTEX_BUFFER  (512 * 1024)
+#define MAX_INDEX_BUFFER   (128 * 1024)
+
+// D3D11 globals
+static IDXGISwapChain* swap_chain;
+static ID3D11Device* device;
+static ID3D11DeviceContext* context;
+static ID3D11RenderTargetView* rt_view;
+
+// Log scroll offsets (Nuklear type, so stays here) 
+static nk_uint log_scroll_x = 0;
+static nk_uint log_scroll_y = 0;
+
+// GUI state
+char process_name[256] = "ac_client.exe";
+char export_name[256] = "";
+char shellcode[1024] = "";
+int  method_sel = PL_METHOD_MANUAL_MAP;
+int  iat_mode_sel = PL_IAT_LOADLIBRARY;
+int  exec_method_sel = PL_EXEC_NT_CREATE_THREAD_EX;
+int  alloc_method_sel = PL_ALLOC_ZW_ALLOCATE;
+
+// Log buffer — PLLOG writes here via gui_log when pl_log is set
 #define LOG_MAX 8192
 char  log_buf[LOG_MAX] = "";
 int   log_len = 0;
+
+// Process list
+typedef struct { DWORD pid; char name[260]; } ProcEntry;
+ProcEntry proc_list[2048];
+int       proc_count = 0;
+int       proc_sel = -1;
+
+
+// File browser
+char dll_path[MAX_PATH] = "";
+
+// Window name lookup — finds the first visible titled window
+typedef struct
+{
+    DWORD pid;
+    char title[MAX_PATH];
+} _WndSearchCtx;
 
 void gui_log(const char* fmt, ...)
 {
@@ -40,14 +80,6 @@ void gui_log(const char* fmt, ...)
     log_len += n;
     log_buf[log_len] = '\0';
 }
-
-/*
- * Process list
- */
-typedef struct { DWORD pid; char name[260]; } ProcEntry;
- ProcEntry proc_list[2048];
- int       proc_count = 0;
- int       proc_sel = -1;
 
  void refresh_process_list()
 {
@@ -124,11 +156,6 @@ typedef struct { DWORD pid; char name[260]; } ProcEntry;
     return found;
 }
 
-/*
- * File browser
- */
-char dll_path[MAX_PATH] = "";
-
 void browse_dll()
 {
     OPENFILENAMEA ofn;
@@ -142,27 +169,6 @@ void browse_dll()
     if (GetOpenFileNameA(&ofn))
         memcpy(dll_path, buf, MAX_PATH);
 }
-
-/*
- * GUI state
- */
-char process_name[256] = "ac_client.exe";
-char export_name[256] = "";
-char shellcode[1024] = "";
-int  method_sel = PL_METHOD_MANUAL_MAP;
-int  iat_mode_sel = PL_IAT_LOADLIBRARY;
-int  exec_method_sel = PL_EXEC_NT_CREATE_THREAD_EX;
-int  alloc_method_sel = PL_ALLOC_ZW_ALLOCATE;
-
-/*
- * Window name lookup — finds the first visible titled window
- * belonging to a given process name.
- */
-typedef struct 
-{
-    DWORD pid; 
-    char title[MAX_PATH];
-} _WndSearchCtx;
 
 BOOL CALLBACK _enum_wnd_cb(HWND hwnd, LPARAM lp)
 {
@@ -189,11 +195,7 @@ const char* findWindowNameFromPath(const char* procName)
     return result;
 }
 
-/*
- * Shellcode text parser
- * Handles \xNN, 0xNN, and bare hex pairs (NN).
- * Returns malloc'd buffer; caller frees.
- */
+// Shellcode text parser
 int _is_hex(char c) 
 {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
@@ -263,9 +265,7 @@ BYTE* parse_shellcode(const char* src, SIZE_T* outLen)
     return buf;
 }
 
-/*
- * Injection glue — wires GUI state into PLRing3 and calls inject()
- */
+// Injection glue — wires GUI state into PLRing3 and calls inject()
 void do_inject()
 {
     DWORD pid;
@@ -381,6 +381,39 @@ void do_inject()
         (uintptr_t)nth->OptionalHeader.ImageBase, nth->OptionalHeader.AddressOfEntryPoint,
         nth->FileHeader.NumberOfSections, nth->OptionalHeader.SizeOfImage);
 
+    ResolveZwApi();
+    if (PLRing3.method != PL_METHOD_SHELLCODE && PLRing3.libraryPath[0] == '\0')
+    {
+        PLLOG("[-] No DLL path set\n");
+        return PL_ERR_NO_DLL_PATH;
+    }
+
+    if (PLRing3.method == PL_METHOD_SHELLCODE)
+    {
+
+        if (!PLRing3.hTargetProcess)
+        {
+            PLLOG("[-] No target process handle\n");
+            return PL_ERR_NO_PROCESS;
+        }
+        if (!PLRing3.shellcodeBytes || !PLRing3.shellcodeLen)
+        {
+            PLLOG("[-] No shellcode provided\n");
+            return PL_ERR_NO_SHELLCODE;
+        }
+
+    }
+
+    if (PLRing3.method == PL_METHOD_SET_WINDOWS_HOOK)
+    {
+
+        if (PLRing3.exportedMain[0] == '\0')
+        {
+            PLLOG("[!] No export name specified for SetWindowsHookEx\n");
+            return PL_ERR_HOOK_PROC;
+        }
+    }
+
      res = inject(hSection, raw, remoteBuf, nth);
 
     if (PLRing3.shellcodeBytes) 
@@ -395,29 +428,7 @@ void do_inject()
     CloseHandle(hProc);
 }
 
-/*
- *  Constants
- *  */
-#define WINDOW_WIDTH       640
-#define WINDOW_HEIGHT      640
-#define MAX_VERTEX_BUFFER  (512 * 1024)
-#define MAX_INDEX_BUFFER   (128 * 1024)
-
- /*
-  *  D3D11 globals
-  *  */
-static IDXGISwapChain* swap_chain;
-static ID3D11Device* device;
-static ID3D11DeviceContext* context;
-static ID3D11RenderTargetView* rt_view;
-
-/* Log scroll offsets (Nuklear type, so stays here) */
-static nk_uint log_scroll_x = 0;
-static nk_uint log_scroll_y = 0;
-
-/*
- *  D3D11 helpers
- *  */
+// D3D11 helpers
 static void set_swap_chain_size(int w, int h)
 {
     ID3D11Texture2D* bb;
@@ -453,9 +464,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-/*
- *  Dark theme
- *  */
+// Dark theme
 static void set_dark_theme(struct nk_context* ctx)
 {
     struct nk_color table[NK_COLOR_COUNT];

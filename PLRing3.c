@@ -152,7 +152,6 @@ PL_Result ExecuteRemote(PVOID ep)
     {
     case PL_EXEC_NT_CREATE_THREAD_EX: 
     {
-        PLLOG("[*] ZwCreateThreadEx at %p\n", ep);
         HANDLE ht = NULL;
         ZwCreateThreadEx(&ht, THREAD_ALL_ACCESS, NULL, PLRing3.hTargetProcess, ep, NULL, 0, 0, 0x1000, 0x100000, NULL);
 
@@ -163,7 +162,6 @@ PL_Result ExecuteRemote(PVOID ep)
 
     case PL_EXEC_QUEUE_USER_APC: 
     {
-        PLLOG("[*] ZwQueueApcThread at %p\n", ep);
         DWORD pid = GetProcessId(PLRing3.hTargetProcess);
         PVOID buf = QuerySystemProcessInfo();
 
@@ -206,7 +204,6 @@ PL_Result ExecuteRemote(PVOID ep)
     }
 
     case PL_EXEC_THREAD_HIJACK: {
-        PLLOG("[*] Thread hijack at %p\n", ep);
         DWORD pid = GetProcessId(PLRing3.hTargetProcess);
         PVOID buf = QuerySystemProcessInfo();
 
@@ -276,13 +273,6 @@ PL_Result SetWindowsHookExInject()
     MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wpath, MAX_PATH);
 
     HMODULE lib = LoadLibraryW(wpath);
-
-    if (PLRing3.exportedMain[0] == '\0')
-    {
-        PLLOG("[!] No export name specified for SetWindowsHookEx\n");
-        FreeLibrary(lib);
-        return PL_ERR_HOOK_PROC;
-    }
     HOOKPROC proc = (HOOKPROC)GetProcAddress(lib, PLRing3.exportedMain);
     HWND hWnd = FindWindowA(NULL, PLRing3.windowName);
     DWORD tid = GetWindowThreadProcessId(hWnd, &pid);
@@ -485,18 +475,6 @@ done:
 
 PL_Result ShellcodeInject()
 {
-    if (!PLRing3.hTargetProcess)
-    { 
-        PLLOG("[-] No target process handle\n");
-        return PL_ERR_NO_PROCESS;
-    }
-    if (!PLRing3.shellcodeBytes || !PLRing3.shellcodeLen)
-    {
-        PLLOG("[-] No shellcode provided\n");
-        return PL_ERR_NO_SHELLCODE;
-    }
-
-    PLLOG("[*] Shellcode: %lu bytes\n", (unsigned long)PLRing3.shellcodeLen);
     LPVOID remoteBuf = NULL;
 
     if (PLRing3.allocMethod == PL_ALLOC_MAP_VIEW_OF_SECTION)
@@ -544,13 +522,6 @@ PL_Result ShellcodeInject()
 //public api to call from main
 PL_Result inject(HANDLE hSection, LPVOID raw, PVOID remoteBuf, PIMAGE_NT_HEADERS nth)
 {
-    ResolveZwApi();
-    if (PLRing3.method != PL_METHOD_SHELLCODE && PLRing3.libraryPath[0] == '\0')
-    {
-        PLLOG("[-] No DLL path set\n");
-        return PL_ERR_NO_DLL_PATH;
-    }
-
     PL_Result res = PL_OK;
     switch (PLRing3.method)
     {

@@ -352,6 +352,4 @@ static PVOID QuerySystemProcessInfo()
 
  /* ---- public API ---- */
 
-PL_Result inject(
-    HANDLE hSection, LPVOID raw,
-    PVOID remoteBuf, PIMAGE_NT_HEADERS nth);
+PL_Result inject(HANDLE hSection, LPVOID raw, PVOID remoteBuf, PIMAGE_NT_HEADERS nth);
