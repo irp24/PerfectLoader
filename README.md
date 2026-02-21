@@ -11,11 +11,11 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 ![Arch](https://img.shields.io/badge/arch-x64%20%7C%20x86-lightgrey?style=flat-square)
 ![License](https://img.shields.io/badge/license-Educational-red?style=flat-square)
 
-</div>
+
 
 ---
 
-## ✨ Features at a Glance
+##  Features
 
 > Mix and match injection, execution, and allocation strategies independently from the GUI.
 
@@ -23,7 +23,7 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 <tr>
 <td valign="top" width="33%">
 
-### 🧬 Injection
+###  Injection
 - Manual Map (reflective PE)
 - SetWindowsHookEx
 - Shellcode
@@ -31,7 +31,7 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 </td>
 <td valign="top" width="33%">
 
-### ⚡ Execution
+###  Execution
 - NtCreateThreadEx
 - QueueUserAPC
 - Thread Hijack
@@ -39,7 +39,7 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 </td>
 <td valign="top" width="33%">
 
-### 🗺️ Allocation
+###  Allocation
 - ZwAllocateVirtualMemory
 - NtMapViewOfSection
 - RWX Cave Hunt
@@ -50,18 +50,6 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 
 ---
 
-## 🏗️ Architecture
-
-```
-PerfectLoader/
-├── PerfectLoader.c     — WinMain, D3D11 setup, Nuklear main loop
-├── PLGui.h             — GUI state, process list, shellcode parser, injection glue (do_inject)
-├── PLRing3.h           — Config struct, enums, NT type definitions, Zw function pointer declarations
-├── PLRing3.c           — Injection engine: ResolveZwApi, ManualMapInject, ShellcodeInject,
-│                         SetWindowsHookExInject, ExecuteRemote, helper utilities
-├── nuklear.h           — Nuklear immediate-mode GUI library
-└── nuklear_d3d11.h     — Nuklear Direct3D 11 backend
-```
 
 ### `PLRing3` Config Struct
 
@@ -86,7 +74,7 @@ pl_log = my_log_function;
 
 ---
 
-## 🔨 Building
+##  Building
 
 Open `PerfectLoader.sln` and build in **Release** or **Debug** configuration.
 
@@ -95,7 +83,7 @@ Open `PerfectLoader.sln` and build in **Release** or **Debug** configuration.
 
 ---
 
-## 🚀 Usage
+##  Usage
 
 1. Run **`PerfectLoader.exe`** as **Administrator**
 2. Enter or browse for the **DLL path** *(not required for shellcode mode)*
@@ -110,3 +98,6 @@ Open `PerfectLoader.sln` and build in **Release** or **Debug** configuration.
 ## ⚠️ Disclaimer
 
 This project is intended for **educational and research purposes only** (e.g., malware analysis, security research in controlled environments). Do not use against systems you do not own or have explicit permission to test.
+
+
+</div>
