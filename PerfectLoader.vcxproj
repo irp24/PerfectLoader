@@ -133,12 +133,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="PerfectLoader.c" />
+    <ClCompile Include="PLRing3.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="nuklear.h" />
     <ClInclude Include="nuklear_d3d11.h" />
     <ClInclude Include="nuklear_d3d11_pixel_shader.h" />
     <ClInclude Include="nuklear_d3d11_vertex_shader.h" />
+    <ClInclude Include="PLGui.h" />
     <ClInclude Include="PLRing3.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

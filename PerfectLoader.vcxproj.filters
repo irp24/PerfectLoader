@@ -21,6 +21,9 @@
     <ClCompile Include="PerfectLoader.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="PLRing3.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PLRing3.h">
@@ -36,6 +39,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="nuklear_d3d11_pixel_shader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PLGui.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
