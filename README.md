@@ -17,8 +17,6 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 
 ##  Features
 
-> Mix and match injection, execution, and allocation strategies independently from the GUI.
-
 <table>
 <tr>
 <td valign="top" width="33%">
@@ -54,6 +52,7 @@ All NT syscall wrappers are resolved dynamically at runtime from <code>ntdll.dll
 ### `PLRing3` Config Struct
 
 The GUI wires everything automatically. To use the engine headlessly, populate the global `PLRing3` struct and call `inject()`:
+</div>
 
 ```c
 PLRing3.hTargetProcess  = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
@@ -66,6 +65,7 @@ strncpy(PLRing3.libraryPath, "C:\\path\\to\\payload.dll", MAX_PATH - 1);
 inject();
 ```
 
+﻿<div align="center">
 The logging sink defaults to `printf`. Redirect it to your own function before calling `inject()`:
 
 ```c
