@@ -72,8 +72,6 @@ PLRing3.hTargetProcess  = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
 PLRing3.method          = PL_METHOD_MANUAL_MAP;
 PLRing3.execMethod      = PL_EXEC_NT_CREATE_THREAD_EX;
 PLRing3.allocMethod     = PL_ALLOC_ZW_ALLOCATE;
-PLRing3.fixRelocations  = TRUE;
-PLRing3.fixIAT          = TRUE;
 PLRing3.iatMode         = PL_IAT_LOADLIBRARY;
 strncpy(PLRing3.libraryPath, "C:\\path\\to\\payload.dll", MAX_PATH - 1);
 
