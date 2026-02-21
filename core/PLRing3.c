@@ -177,10 +177,7 @@ PL_Result ExecuteRemote(PVOID ep)
                     OBJECT_ATTRIBUTES oa;
                     InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
 
-                    PL_CLIENT_ID cid = { 
-                        NULL,
-                        p->Threads[i].ClientId.UniqueThread 
-                    };
+                    PL_CLIENT_ID cid = { NULL, p->Threads[i].ClientId.UniqueThread};
 
                     if (NT_SUCCESS(ZwOpenThread(&ht, THREAD_SET_CONTEXT, &oa, &cid)) && ht) 
                     {
@@ -335,7 +332,6 @@ PL_Result ManualMapInject(HANDLE hSection, LPVOID raw, PVOID remoteBuf, PIMAGE_N
     {
         remoteBuf = ZwAllocRemote(PLRing3.hTargetProcess, (SIZE_T)nth->OptionalHeader.SizeOfImage, PAGE_EXECUTE_READWRITE);
     }
-    PLLOG("[+] Remote alloc: %p\n", remoteBuf);
 
     /* relocations */
     {

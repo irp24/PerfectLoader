@@ -2,19 +2,7 @@
 #include <stdarg.h>
 #include <commdlg.h>
 
-#define NK_INCLUDE_FIXED_TYPES
-#define NK_INCLUDE_STANDARD_IO
-#define NK_INCLUDE_STANDARD_VARARGS
-#define NK_INCLUDE_DEFAULT_ALLOCATOR
-#define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
-#define NK_INCLUDE_FONT_BAKING
-#define NK_INCLUDE_DEFAULT_FONT
-#define NK_IMPLEMENTATION
-#define NK_D3D11_IMPLEMENTATION
 
-#include "../../nuklear.h"
-#include "nuklear_d3d11.h"
-#include "PLRing3.h"
 
 // Constants
 #define WINDOW_WIDTH       640
@@ -268,26 +256,15 @@ BYTE* parse_shellcode(const char* src, SIZE_T* outLen)
 // Injection glue — wires GUI state into PLRing3 and calls inject()
 void do_inject()
 {
-    DWORD pid;
-    if (method_sel != PL_METHOD_SHELLCODE && dll_path[0] == '\0') 
-    {
-        gui_log("[!] No DLL path set\n"); return;
-    }
+    ResolveZwApi();
 
-    if (proc_sel >= 0 && proc_sel < proc_count) 
-    {
-        pid = proc_list[proc_sel].pid;
-        gui_log("[*] Target: %s (PID %lu)\n", proc_list[proc_sel].name, pid);
-    } 
-    else 
-    {
-        pid = find_pid_by_name(process_name);
-        if (!pid)
-        { 
-            gui_log("[!] '%s' not found\n", process_name);
-            return;
-        }
-        gui_log("[*] Found '%s' -> PID %lu\n", process_name, pid);
+    DWORD pid;
+    
+    pid = find_pid_by_name(process_name);
+    if (!pid)
+    { 
+        gui_log("[!] '%s' not found\n", process_name);
+        return;
     }
 
     HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
@@ -307,32 +284,10 @@ void do_inject()
     PLRing3.hTargetProcess = hProc;
     PLRing3.windowName = findWindowNameFromPath(process_name);
 
-    if (method_sel == PL_METHOD_SHELLCODE) 
-    {
-        PLRing3.shellcodeBytes = parse_shellcode(shellcode, &PLRing3.shellcodeLen);
-        if (!PLRing3.shellcodeBytes || PLRing3.shellcodeLen == 0) 
-        {
-            gui_log("[!] No valid bytes in shellcode input\n");
-            CloseHandle(hProc); return;
-        }
-        gui_log("[*] Parsed %lu shellcode bytes\n", (unsigned long)PLRing3.shellcodeLen);
-    }
-
     pl_log = gui_log;
     gui_log("[*] Injecting via %s...\n", PL_MethodNames[method_sel]);
 
-    if (!PLRing3.hTargetProcess)
-    {
-        PLLOG("[-] No target process handle\n");
-        return PL_ERR_NO_PROCESS;
-    }
-
-    PL_Result  res = PL_OK;
-    HANDLE     hSection = NULL;
-    LPVOID     raw = NULL, img = NULL, remoteBuf = NULL;
-    PIMAGE_NT_HEADERS nth = NULL;
-
-    /* read DLL from disk */
+    // read DLL from disk 
     WCHAR wPath[MAX_PATH];
     MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wPath, MAX_PATH);
     UNICODE_STRING ntPath = { 0 };
@@ -344,14 +299,16 @@ void do_inject()
     NTSTATUS nts = ZwCreateFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
     RtlFreeUnicodeString(&ntPath);
 
-    gui_log("[+] Opened: %s\n", PLRing3.libraryPath);
-
     PL_FILE_STANDARD_INFORMATION fsi;
     IO_STATUS_BLOCK ioQ;
     nts = ZwQueryInformationFile(hFile, &ioQ, &fsi, sizeof(fsi), PL_FileStandardInformation);
 
     DWORD fileSize = (DWORD)fsi.EndOfFile.LowPart;
-    gui_log("[+] File size: %lu bytes\n", fileSize);
+
+    PL_Result  res = PL_OK;
+    HANDLE     hSection = NULL;
+    LPVOID     raw = NULL, img = NULL, remoteBuf = NULL;
+    PIMAGE_NT_HEADERS nth = NULL;
 
     raw = ZwAllocLocal((SIZE_T)fileSize, PAGE_READWRITE);
 
@@ -360,10 +317,42 @@ void do_inject()
     nts = ZwReadFile(hFile, NULL, NULL, NULL, &ioR, raw, fileSize, &off, NULL);
     ZwClose(hFile);
 
-    gui_log("[+] Read %lu bytes\n", (DWORD)ioR.Information);
-
-    /* validate PE */
+    if (!PLRing3.hTargetProcess)
     {
+        PLLOG("[-] No target process handle\n");
+        return PL_ERR_NO_PROCESS;
+    }
+    
+    if (PLRing3.method == PL_METHOD_SHELLCODE)
+    {
+        if (!PLRing3.shellcodeBytes || !PLRing3.shellcodeLen)
+        {
+            PLLOG("[-] No shellcode provided\n");
+            return PL_ERR_NO_SHELLCODE;
+        }
+        PLRing3.shellcodeBytes = parse_shellcode(shellcode, &PLRing3.shellcodeLen);
+        if (!PLRing3.shellcodeBytes || PLRing3.shellcodeLen == 0)
+        {
+            gui_log("[!] No valid bytes in shellcode input\n");
+            CloseHandle(hProc); return;
+        }
+    }
+    else
+    {
+        if (PLRing3.method == PL_METHOD_SET_WINDOWS_HOOK)
+        {
+            if (PLRing3.exportedMain[0] == '\0')
+            {
+                PLLOG("[!] No export name specified for SetWindowsHookEx\n");
+                return PL_ERR_HOOK_PROC;
+            }
+        }
+        if (PLRing3.libraryPath[0] == '\0')
+        {
+            PLLOG("[-] No DLL path set\n");
+            return PL_ERR_NO_DLL_PATH;
+        }
+
         IMAGE_DOS_HEADER* dh = (IMAGE_DOS_HEADER*)raw;
         if (dh->e_magic != IMAGE_DOS_SIGNATURE)
         {
@@ -377,44 +366,12 @@ void do_inject()
             return;
         }
     }
+
     gui_log("[+] ImageBase=0x%IX  EP=0x%08X  Sections=%u  SizeOfImage=0x%X\n",
         (uintptr_t)nth->OptionalHeader.ImageBase, nth->OptionalHeader.AddressOfEntryPoint,
         nth->FileHeader.NumberOfSections, nth->OptionalHeader.SizeOfImage);
 
-    ResolveZwApi();
-    if (PLRing3.method != PL_METHOD_SHELLCODE && PLRing3.libraryPath[0] == '\0')
-    {
-        PLLOG("[-] No DLL path set\n");
-        return PL_ERR_NO_DLL_PATH;
-    }
-
-    if (PLRing3.method == PL_METHOD_SHELLCODE)
-    {
-
-        if (!PLRing3.hTargetProcess)
-        {
-            PLLOG("[-] No target process handle\n");
-            return PL_ERR_NO_PROCESS;
-        }
-        if (!PLRing3.shellcodeBytes || !PLRing3.shellcodeLen)
-        {
-            PLLOG("[-] No shellcode provided\n");
-            return PL_ERR_NO_SHELLCODE;
-        }
-
-    }
-
-    if (PLRing3.method == PL_METHOD_SET_WINDOWS_HOOK)
-    {
-
-        if (PLRing3.exportedMain[0] == '\0')
-        {
-            PLLOG("[!] No export name specified for SetWindowsHookEx\n");
-            return PL_ERR_HOOK_PROC;
-        }
-    }
-
-     res = inject(hSection, raw, remoteBuf, nth);
+    res = inject(hSection, raw, remoteBuf, nth);
 
     if (PLRing3.shellcodeBytes) 
     { 

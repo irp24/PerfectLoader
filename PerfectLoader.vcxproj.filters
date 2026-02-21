@@ -13,36 +13,42 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-    <Filter Include="common">
-      <UniqueIdentifier>{0d26930a-8dca-4b98-a6ba-0703c1fd5f32}</UniqueIdentifier>
+    <Filter Include="core">
+      <UniqueIdentifier>{d3a1f879-1a6e-4c54-b52b-7e6d0a7a3b32}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="gui">
+      <UniqueIdentifier>{9aab018f-a9bd-4963-8db2-231aef7f2402}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="nuklear">
+      <UniqueIdentifier>{4a3a60f9-a8cd-4796-9f79-e5a882eeb29c}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="PerfectLoader.c">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="core\PerfectLoader.c">
+      <Filter>core</Filter>
     </ClCompile>
-    <ClCompile Include="PLRing3.c">
-      <Filter>Source Files</Filter>
+    <ClCompile Include="core\PLRing3.c">
+      <Filter>core</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="PLRing3.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="core\PLRing3.h">
+      <Filter>core</Filter>
     </ClInclude>
-    <ClInclude Include="nuklear_d3d11.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="nuklear\nuklear_d3d11.h">
+      <Filter>nuklear</Filter>
     </ClInclude>
-    <ClInclude Include="nuklear.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="nuklear\nuklear.h">
+      <Filter>nuklear</Filter>
     </ClInclude>
-    <ClInclude Include="nuklear_d3d11_vertex_shader.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="nuklear\nuklear_d3d11_vertex_shader.h">
+      <Filter>nuklear</Filter>
     </ClInclude>
-    <ClInclude Include="nuklear_d3d11_pixel_shader.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="nuklear\nuklear_d3d11_pixel_shader.h">
+      <Filter>nuklear</Filter>
     </ClInclude>
-    <ClInclude Include="PLGui.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="gui\PLGui.h">
+      <Filter>gui</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
