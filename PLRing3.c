@@ -9,11 +9,6 @@ void ResolveZwApi()
     if (resolved) return;
 
     HMODULE nt = GetModuleHandleA("ntdll.dll");
-    if (!nt) 
-    {
-        PLLOG("[-] ntdll.dll not found\n");
-        return; 
-    }
 
     ZwClose = GetProcAddress(nt, "ZwClose");
     ZwAllocateVirtualMemory = GetProcAddress(nt, "ZwAllocateVirtualMemory");
@@ -70,10 +65,6 @@ PVOID QuerySystemProcessInfo()
 {
     ULONG bufSize = 0x80000;
     PVOID buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
-    if (!buf)
-    {
-        return NULL;
-    }
     while (TRUE) 
     {
         ULONG retLen = 0;
@@ -87,10 +78,6 @@ PVOID QuerySystemProcessInfo()
             ZwFreeLocal(buf);
             bufSize = retLen + 0x1000;
             buf = ZwAllocLocal(bufSize, PAGE_READWRITE);
-            if (!buf)
-            {
-                return NULL;
-            }
         } 
         else 
         {
@@ -156,37 +143,22 @@ PVOID RemoteGetModuleBaseFromPEB(HANDLE hProcess, const char* moduleName)
     MultiByteToWideChar(CP_ACP, 0, moduleName, -1, wName, MAX_PATH);
 
     PROCESS_BASIC_INFORMATION pbi;
-    if (!NT_SUCCESS(ZwQueryInformationProcess(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL)))
-    { 
-        PLLOG("[-] ZwQueryInformationProcess failed\n");
-        return NULL;
-    }
+    ZwQueryInformationProcess(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
 
     PEB peb;
-    if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, pbi.PebBaseAddress, &peb, sizeof(peb), NULL)))
-    { 
-        PLLOG("[-] Failed to read remote PEB\n");
-        return NULL;
-    }
+    ZwReadVirtualMemory(hProcess, pbi.PebBaseAddress, &peb, sizeof(peb), NULL);
 
     FULL_PEB_LDR_DATA ldr;
-    if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, peb.Ldr, &ldr, sizeof(ldr), NULL)))
-    { 
-        PLLOG("[-] Failed to read remote Ldr\n");
-        return NULL;
-    }
+    ZwReadVirtualMemory(hProcess, peb.Ldr, &ldr, sizeof(ldr), NULL);
 
     PVOID head = (PVOID)((uintptr_t)peb.Ldr + offsetof(FULL_PEB_LDR_DATA, InLoadOrderModuleList));
     PVOID cur  = ldr.InLoadOrderModuleList.Flink;
-
+    
     while (cur != head)
     {
         LDR_ENTRY_FULL e;
         memset(&e, 0, sizeof(e));
-        if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, cur, &e, sizeof(e), NULL)))
-        {
-            break;
-        }
+        ZwReadVirtualMemory(hProcess, cur, &e, sizeof(e), NULL);
             
         if (e.BaseDllName.Buffer && e.BaseDllName.Length > 0) 
         {
@@ -196,14 +168,13 @@ PVOID RemoteGetModuleBaseFromPEB(HANDLE hProcess, const char* moduleName)
             {
                 len = (MAX_PATH - 1) * 2;
             }
-            if (NT_SUCCESS(ZwReadVirtualMemory(hProcess, e.BaseDllName.Buffer, nameBuf, len, NULL)))
+            ZwReadVirtualMemory(hProcess, e.BaseDllName.Buffer, nameBuf, len, NULL);
+            if (_wcsicmp(nameBuf, wName) == 0) 
             {
-                if (_wcsicmp(nameBuf, wName) == 0) 
-                {
-                    return e.DllBase;
-                }
-
+                return e.DllBase;
             }
+
+            
         }
         cur = e.InLoadOrderLinks.Flink;
     }
@@ -213,26 +184,15 @@ PVOID RemoteGetModuleBaseFromPEB(HANDLE hProcess, const char* moduleName)
 PVOID RemoteCustomGetProcAddress(HANDLE hProcess, PVOID remoteBase, LPCSTR procName)
 {
     IMAGE_DOS_HEADER dos;
-    if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, remoteBase, &dos, sizeof(dos), NULL)))
-    {
-        return NULL;
-    }
+    ZwReadVirtualMemory(hProcess, remoteBase, &dos, sizeof(dos), NULL);
+
     IMAGE_NT_HEADERS nt;
-    if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + dos.e_lfanew, &nt, sizeof(nt), NULL)))
-    {
-        return NULL;
-    }
+    ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + dos.e_lfanew, &nt, sizeof(nt), NULL);
+
     IMAGE_DATA_DIRECTORY expDataDir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-    if (!expDataDir.VirtualAddress) 
-    {
-        return NULL;
-    }
 
     IMAGE_EXPORT_DIRECTORY expDir;
-    if (!NT_SUCCESS(ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + expDataDir.VirtualAddress, &expDir, sizeof(expDir), NULL)))
-    {
-        return NULL;
-    }
+    ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + expDataDir.VirtualAddress, &expDir, sizeof(expDir), NULL);
 
     uintptr_t funcIdx = (uintptr_t)-1;
 
@@ -266,70 +226,6 @@ PVOID RemoteCustomGetProcAddress(HANDLE hProcess, PVOID remoteBase, LPCSTR procN
 
     DWORD funcRVA = 0;
     ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + expDir.AddressOfFunctions + funcIdx * sizeof(DWORD), &funcRVA, sizeof(DWORD), NULL);
-    if (!funcRVA) 
-    {
-        return NULL;
-    }
-
-    // forwarded claude.ai made it
-    if (funcRVA >= expDataDir.VirtualAddress && funcRVA < expDataDir.VirtualAddress + expDataDir.Size) 
-    {
-        char fwd[256] = {0};
-        ZwReadVirtualMemory(hProcess, (uintptr_t)remoteBase + funcRVA, fwd, sizeof(fwd) - 1, NULL);
-
-        char* dot = fwd;
-        while (*dot && *dot != '.')
-        {
-            dot++;
-        }
-        if (!*dot)
-        {
-            return NULL;
-        }
-        *dot = '\0';
-
-        char dll[264];
-        int k;
-        for (k = 0; fwd[k]; k++) 
-        {
-            dll[k] = fwd[k];
-        }
-        int hasDot = 0;
-        for (int m = 0; m < k; m++) 
-        {
-            if (fwd[m] == '.') 
-            { 
-                hasDot = 1;
-                break;
-            }
-        }
-        if (!hasDot) 
-        { 
-            dll[k++] = '.';
-            dll[k++] = 'd';
-            dll[k++] = 'l';
-            dll[k++] = 'l';
-        }
-        dll[k] = '\0';
-
-        PVOID fwdMod = RemoteGetModuleBaseFromPEB(hProcess, dll);
-        if (!fwdMod) 
-        {
-            return NULL;
-        }
-
-        char* fwdFunc = dot + 1;
-        if (fwdFunc[0] == '#')
-        {
-            ULONG ord = 0;
-            for (char* p = fwdFunc + 1; *p >= '0' && *p <= '9'; p++)
-            {
-                ord = ord * 10 + (*p - '0');
-            }
-            return RemoteCustomGetProcAddress(hProcess, fwdMod, (LPCSTR)(ULONG_PTR)ord);
-        }
-        return RemoteCustomGetProcAddress(hProcess, fwdMod, fwdFunc);
-    }
 
     return (PVOID)((uintptr_t)remoteBase + funcRVA);
 }
@@ -346,12 +242,6 @@ PL_Result ExecuteRemote(PVOID ep)
         HANDLE ht = NULL;
         NTSTATUS st = ZwCreateThreadEx(&ht, THREAD_ALL_ACCESS, NULL, PLRing3.hTargetProcess, ep, NULL, 0, 0, 0x1000, 0x100000, NULL);
 
-        if (!NT_SUCCESS(st) || !ht) 
-        {
-            PLLOG("[-] ZwCreateThreadEx failed: 0x%08lX\n", (unsigned long)st);
-            return PL_ERR_THREAD_CREATE;
-        }
-
         PLLOG("[+] Thread created via ZwCreateThreadEx (handle=%p)\n", ht);
         ZwClose(ht);
         return PL_OK;
@@ -362,11 +252,6 @@ PL_Result ExecuteRemote(PVOID ep)
         PLLOG("[*] ZwQueueApcThread at %p\n", ep);
         DWORD pid = GetProcessId(PLRing3.hTargetProcess);
         PVOID buf = QuerySystemProcessInfo();
-        if (!buf) 
-        { 
-            PLLOG("[-] ZwQuerySystemInformation failed\n");
-            return PL_ERR_THREAD_CREATE;
-        }
 
         int queued = 0;
         PL_SYSTEM_PROCESS_INFORMATION* p = (PL_SYSTEM_PROCESS_INFORMATION*)buf;
@@ -380,8 +265,7 @@ PL_Result ExecuteRemote(PVOID ep)
                     OBJECT_ATTRIBUTES oa;
                     InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
 
-                    PL_CLIENT_ID cid = 
-                    { 
+                    PL_CLIENT_ID cid = { 
                         NULL,
                         p->Threads[i].ClientId.UniqueThread 
                     };
@@ -402,11 +286,6 @@ PL_Result ExecuteRemote(PVOID ep)
             p = (PL_SYSTEM_PROCESS_INFORMATION*)((uintptr_t)p + p->NextEntryOffset);
         }
         ZwFreeLocal(buf);
-        if (!queued) 
-        { 
-            PLLOG("[-] No threads found for ZwQueueApcThread\n");
-            return PL_ERR_THREAD_CREATE;
-        }
 
         PLLOG("[+] APC queued to %d thread(s)\n", queued);
         return PL_OK;
@@ -416,11 +295,6 @@ PL_Result ExecuteRemote(PVOID ep)
         PLLOG("[*] Thread hijack at %p\n", ep);
         DWORD pid = GetProcessId(PLRing3.hTargetProcess);
         PVOID buf = QuerySystemProcessInfo();
-        if (!buf) 
-        { 
-            PLLOG("[-] ZwQuerySystemInformation failed\n");
-            return PL_ERR_THREAD_CREATE;
-        }
 
         HANDLE hThread = NULL;
         PL_SYSTEM_PROCESS_INFORMATION* p = (PL_SYSTEM_PROCESS_INFORMATION*)buf;
@@ -457,21 +331,11 @@ PL_Result ExecuteRemote(PVOID ep)
             PLLOG("[-] No thread found for hijack\n");
             return PL_ERR_THREAD_CREATE;
         }
-        if (!NT_SUCCESS(ZwSuspendThread(hThread, NULL))) 
-        {
-            PLLOG("[-] ZwSuspendThread failed\n");
-            ZwClose(hThread);
-            return PL_ERR_THREAD_CREATE;
-        }
+        ZwSuspendThread(hThread, NULL);
+
         CONTEXT ctx;
         ctx.ContextFlags = CONTEXT_CONTROL;
-        if (!NT_SUCCESS(ZwGetContextThread(hThread, &ctx))) 
-        {
-            PLLOG("[-] ZwGetContextThread failed\n");
-            ZwResumeThread(hThread, NULL);
-            ZwClose(hThread);
-            return PL_ERR_THREAD_CREATE;
-        }
+        ZwGetContextThread(hThread, &ctx);
 
         #ifdef _WIN64
         ctx.Rip = (DWORD64)ep;
@@ -479,13 +343,7 @@ PL_Result ExecuteRemote(PVOID ep)
         ctx.Eip = (DWORD)(uintptr_t)ep;
         #endif
 
-        if (!NT_SUCCESS(ZwSetContextThread(hThread, &ctx)))
-        {
-            PLLOG("[-] ZwSetContextThread failed\n");
-            ZwResumeThread(hThread, NULL);
-            ZwClose(hThread);
-            return PL_ERR_THREAD_CREATE;
-        }
+        ZwSetContextThread(hThread, &ctx);
         ZwResumeThread(hThread, NULL);
         ZwClose(hThread);
         PLLOG("[+] Thread hijacked, IP redirected to %p\n", ep);
@@ -499,14 +357,11 @@ PL_Result ExecuteRemote(PVOID ep)
 
 PL_Result SetWindowsHookExInject()
 {
+    DWORD pid = 0;
     WCHAR wpath[MAX_PATH];
     MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wpath, MAX_PATH);
 
     HMODULE lib = LoadLibraryW(wpath);
-    if (!lib) {
-        PLLOG("[!] LoadLibrary failed: %lu\n", GetLastError());
-        return PL_ERR_HOOK_LOAD;
-    }
 
     if (PLRing3.exportedMain[0] == '\0')
     {
@@ -515,24 +370,10 @@ PL_Result SetWindowsHookExInject()
         return PL_ERR_HOOK_PROC;
     }
     HOOKPROC proc = (HOOKPROC)GetProcAddress(lib, PLRing3.exportedMain);
-    if (!proc)
-    {
-        PLLOG("[!] Export '%s' not found in DLL\n", PLRing3.exportedMain);
-        FreeLibrary(lib);
-        return PL_ERR_HOOK_PROC;
-    }
-
     HWND hWnd = FindWindowA(NULL, PLRing3.windowName);
-    DWORD pid = 0;
     DWORD tid = GetWindowThreadProcessId(hWnd, &pid);
-
     HHOOK hook = SetWindowsHookExW(WH_GETMESSAGE, proc, lib, tid);
-    if (!hook) 
-    {
-        PLLOG("[!] SetWindowsHookEx failed: %lu\n", GetLastError());
-        FreeLibrary(lib);
-        return PL_ERR_HOOK_INSTALL;
-    }
+
     PLLOG("[+] Hook installed, triggering...\n");
     for (int i = 0; i < 8; i++)
     {
@@ -559,53 +400,30 @@ PL_Result ManualMapInject()
     WCHAR wPath[MAX_PATH];
     MultiByteToWideChar(CP_ACP, 0, PLRing3.libraryPath, -1, wPath, MAX_PATH);
     UNICODE_STRING ntPath = {0};
-    if (!RtlDosPathNameToNtPathName_U(wPath, &ntPath, NULL, NULL)) 
-    {
-        PLLOG("[-] RtlDosPathNameToNtPathName_U failed\n");
-        return PL_ERR_FILE_OPEN;
-    }
+    RtlDosPathNameToNtPathName_U(wPath, &ntPath, NULL, NULL);
     OBJECT_ATTRIBUTES oa;
     InitializeObjectAttributes(&oa, &ntPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
     IO_STATUS_BLOCK iosb;
     HANDLE hFile = NULL;
-    NTSTATUS nts = ZwCreateFile(&hFile, FILE_GENERIC_READ, &oa, &iosb,
-        NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
-        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    NTSTATUS nts = ZwCreateFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
     RtlFreeUnicodeString(&ntPath);
-    if (!NT_SUCCESS(nts))
-    {
-        PLLOG("[-] ZwCreateFile failed: 0x%08lX\n", (unsigned long)nts);
-        return PL_ERR_FILE_OPEN;
-    }
+
     PLLOG("[+] Opened: %s\n", PLRing3.libraryPath);
 
     PL_FILE_STANDARD_INFORMATION fsi;
     IO_STATUS_BLOCK ioQ;
     nts = ZwQueryInformationFile(hFile, &ioQ, &fsi, sizeof(fsi), PL_FileStandardInformation);
-    if (!NT_SUCCESS(nts)) 
-    {
-        ZwClose(hFile);
-        return PL_ERR_FILE_READ;
-    }
+
     DWORD fileSize = (DWORD)fsi.EndOfFile.LowPart;
     PLLOG("[+] File size: %lu bytes\n", fileSize);
 
     raw = ZwAllocLocal((SIZE_T)fileSize, PAGE_READWRITE);
-    if (!raw)
-    {
-        ZwClose(hFile);
-        return PL_ERR_ALLOC_LOCAL;
-    }
 
     IO_STATUS_BLOCK ioR;
     LARGE_INTEGER off = {0};
     nts = ZwReadFile(hFile, NULL, NULL, NULL, &ioR, raw, fileSize, &off, NULL);
     ZwClose(hFile);
-    if (!NT_SUCCESS(nts))
-    {
-        res = PL_ERR_FILE_READ;
-        goto done;
-    }
+
     PLLOG("[+] Read %lu bytes\n", (DWORD)ioR.Information);
 
     /* validate PE */
@@ -629,22 +447,17 @@ PL_Result ManualMapInject()
         (uintptr_t)nth->OptionalHeader.ImageBase, nth->OptionalHeader.AddressOfEntryPoint,
         nth->FileHeader.NumberOfSections, nth->OptionalHeader.SizeOfImage);
 
-    /* map sections */
+	// map sections to local memory
     img = ZwAllocLocal((SIZE_T)nth->OptionalHeader.SizeOfImage, PAGE_READWRITE);
-    if (!img) 
-    { 
-        res = PL_ERR_ALLOC_LOCAL;
-        goto done;
-    }
+
     memcpy(img, raw, nth->OptionalHeader.SizeOfHeaders);
     {
         PIMAGE_SECTION_HEADER sec = IMAGE_FIRST_SECTION(nth);
         for (WORD i = 0; i < nth->FileHeader.NumberOfSections; i++, sec++)
         {
             if (!sec->SizeOfRawData) 
-            {
                 continue;
-            }
+            
             memcpy((PVOID)((uintptr_t)img + sec->VirtualAddress),
                    (PVOID)((uintptr_t)raw + sec->PointerToRawData), sec->SizeOfRawData);
             PLLOG("[+] Section [%.*s]  VA=0x%08X  size=0x%X\n",
@@ -655,28 +468,16 @@ PL_Result ManualMapInject()
     raw = NULL;
     nth = (PIMAGE_NT_HEADERS)((uintptr_t)img + ((IMAGE_DOS_HEADER*)img)->e_lfanew);
 
-    /* remote alloc */
+    // remote alloc 
     if (PLRing3.allocMethod == PL_ALLOC_MAP_VIEW_OF_SECTION)
     {
         LARGE_INTEGER sz;
         sz.QuadPart = nth->OptionalHeader.SizeOfImage;
         nts = ZwCreateSection(&hSection, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
-        if (!NT_SUCCESS(nts))
-        { 
-            PLLOG("[-] ZwCreateSection failed: 0x%08lX\n", (unsigned long)nts);
-            res = PL_ERR_ALLOC_REMOTE;
-            goto done;
-        }
+
         SIZE_T viewSz = 0;
         nts = ZwMapViewOfSection(hSection, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &viewSz, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
-        if (!NT_SUCCESS(nts))
-        {
-            PLLOG("[-] ZwMapViewOfSection (remote) failed: 0x%08lX\n", (unsigned long)nts);
-            ZwClose(hSection);
-            hSection = NULL;
-            res = PL_ERR_ALLOC_REMOTE;
-            goto done;
-        }
+
     } 
     else if (PLRing3.allocMethod == PL_ALLOC_RWX_HUNT)
     {
@@ -691,12 +492,6 @@ PL_Result ManualMapInject()
     else
     {
         remoteBuf = ZwAllocRemote(PLRing3.hTargetProcess, (SIZE_T)nth->OptionalHeader.SizeOfImage, PAGE_EXECUTE_READWRITE);
-        if (!remoteBuf)
-        {
-            PLLOG("[-] ZwAllocateVirtualMemory (remote) failed\n");
-            res = PL_ERR_ALLOC_REMOTE;
-            goto done;
-        }
     }
     PLLOG("[+] Remote alloc: %p\n", remoteBuf);
 
@@ -705,7 +500,6 @@ PL_Result ManualMapInject()
         uintptr_t delta = (uintptr_t)remoteBuf - (uintptr_t)nth->OptionalHeader.ImageBase;
         if (PLRing3.fixRelocations && delta) 
         {
-            PLLOG("[*] Fixing relocations (delta=0x%IX)...\n", delta);
             IMAGE_DATA_DIRECTORY brt = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
             IMAGE_BASE_RELOCATION* blk = (IMAGE_BASE_RELOCATION*)((uintptr_t)img + brt.VirtualAddress);
             uintptr_t end = (uintptr_t)blk + brt.Size;
@@ -757,17 +551,11 @@ PL_Result ManualMapInject()
 
         if (PLRing3.iatMode == PL_IAT_LOADLIBRARY) 
         {
-            PLLOG("[*] IAT fix: LoadLibrary\n");
             for (; id->Name; id++)
             {
                 char* mod = (char*)((uintptr_t)img + id->Name);
                 HMODULE hm = LoadLibraryA(mod);
-                if (!hm) 
-                {
-                    PLLOG("  [-] LoadLibraryA('%s') failed: %lu\n", mod, GetLastError());
-                    res = PL_ERR_IAT_MODULE_NOT_FOUND;
-                    goto done;
-                }
+
                 PLLOG("  [+] %s -> %p\n", mod, (void*)hm);
                 IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)((uintptr_t)img + id->FirstThunk);
                 IMAGE_THUNK_DATA* orig = id->OriginalFirstThunk ? (IMAGE_THUNK_DATA*)((uintptr_t)img + id->OriginalFirstThunk) : thunk;
@@ -776,12 +564,7 @@ PL_Result ManualMapInject()
                     PVOID fn = IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)
                         ? GetProcAddress(hm, (LPCSTR)IMAGE_ORDINAL(orig->u1.Ordinal))
                         : GetProcAddress(hm, ((IMAGE_IMPORT_BY_NAME*)((uintptr_t)img + (uintptr_t)orig->u1.AddressOfData))->Name);
-                    if (!fn)
-                    {
-                        PLLOG("    [-] Function not found in %s\n", mod);
-                        res = PL_ERR_IAT_FUNC_NOT_FOUND;
-                        goto done;
-                    }
+
                     thunk->u1.Function = (ULONG_PTR)fn;
                 }
             }
@@ -789,7 +572,6 @@ PL_Result ManualMapInject()
         }
         else if (PLRing3.iatMode == PL_IAT_READONLY)
         {
-            PLLOG("[*] IAT fix: ReadOnly (remote PEB)\n");
             for (; id->Name; id++) 
             {
                 char* mod = (char*)((uintptr_t)img + id->Name);
@@ -827,14 +609,7 @@ PL_Result ManualMapInject()
         PVOID lv = NULL;
         SIZE_T lvs = 0;
         nts = ZwMapViewOfSection(hSection, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, ViewUnmap, 0, PAGE_READWRITE);
-        if (!NT_SUCCESS(nts))
-        { 
-            PLLOG("[-] ZwMapViewOfSection (local) failed: 0x%08lX\n", (unsigned long)nts);
-            ZwClose(hSection);
-            hSection = NULL;
-            res = PL_ERR_WRITE_REMOTE;
-            goto done;
-        }
+
         memcpy(lv, img, nth->OptionalHeader.SizeOfImage);
         ZwUnmapViewOfSection(NtCurrentProcess(), lv);
         ZwClose(hSection);
@@ -844,31 +619,18 @@ PL_Result ManualMapInject()
     else 
     {
         nts = ZwWriteVirtualMemory(PLRing3.hTargetProcess, remoteBuf, img, nth->OptionalHeader.SizeOfImage, NULL);
-        if (!NT_SUCCESS(nts)) 
-        {
-            PLLOG("[-] ZwWriteVirtualMemory failed\n");
-            res = PL_ERR_WRITE_REMOTE;
-            goto done;
-        }
+
         PLLOG("[+] Written to remote process\n");
     }
 
-    {
-        DWORD epRVA = nth->OptionalHeader.AddressOfEntryPoint;
-        ZwFreeLocal(img);
-        img = NULL;
-        res = ExecuteRemote((LPVOID)((uintptr_t)remoteBuf + epRVA));
-    }
+    DWORD epRVA = nth->OptionalHeader.AddressOfEntryPoint;
+    ZwFreeLocal(img);
+    img = NULL;
+    res = ExecuteRemote((LPVOID)((uintptr_t)remoteBuf + epRVA));
 
 done:
-    if (raw) 
-    {
-        ZwFreeLocal(raw);
-    }
-    if (img) 
-    {
-        ZwFreeLocal(img);
-    }
+    if (raw) ZwFreeLocal(raw);
+    if (img) ZwFreeLocal(img);
     return res;
 }
 
@@ -894,31 +656,13 @@ PL_Result ShellcodeInject()
         sz.QuadPart = (LONGLONG)PLRing3.shellcodeLen;
         HANDLE sec = NULL;
         NTSTATUS st = ZwCreateSection(&sec, SECTION_ALL_ACCESS, NULL, &sz, PAGE_EXECUTE_READWRITE, SEC_COMMIT, NULL);
-        if (!NT_SUCCESS(st)) 
-        {
-            PLLOG("[-] ZwCreateSection failed: 0x%08lX\n", (unsigned long)st);
-            return PL_ERR_ALLOC_REMOTE;
-        }
 
         PVOID lv = NULL;
         SIZE_T lvs = 0;
         st = ZwMapViewOfSection(sec, NtCurrentProcess(), &lv, 0, 0, NULL, &lvs, 2, 0, PAGE_READWRITE);
-        if (!NT_SUCCESS(st)) 
-        {
-            PLLOG("[-] ZwMapViewOfSection (local) failed: 0x%08lX\n", (unsigned long)st);
-            ZwClose(sec);
-            return PL_ERR_ALLOC_REMOTE;
-        }
 
         SIZE_T rvs = 0;
         st = ZwMapViewOfSection(sec, PLRing3.hTargetProcess, &remoteBuf, 0, 0, NULL, &rvs, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
-        if (!NT_SUCCESS(st))
-        {
-            PLLOG("[-] ZwMapViewOfSection (remote) failed: 0x%08lX\n", (unsigned long)st);
-            ZwUnmapViewOfSection(NtCurrentProcess(), lv);
-            ZwClose(sec);
-            return PL_ERR_ALLOC_REMOTE;
-        }
 
         memcpy(lv, PLRing3.shellcodeBytes, PLRing3.shellcodeLen);
         ZwUnmapViewOfSection(NtCurrentProcess(), lv);
@@ -939,18 +683,9 @@ PL_Result ShellcodeInject()
         else
         {
             remoteBuf = ZwAllocRemote(PLRing3.hTargetProcess, PLRing3.shellcodeLen, PAGE_EXECUTE_READWRITE);
-            if (!remoteBuf) 
-            {
-                PLLOG("[-] ZwAllocateVirtualMemory (remote) failed\n");
-                return PL_ERR_ALLOC_REMOTE;
-            }
             PLLOG("[+] Remote alloc: %p\n", remoteBuf);
         }
-        if (!NT_SUCCESS(ZwWriteVirtualMemory(PLRing3.hTargetProcess, remoteBuf, PLRing3.shellcodeBytes, PLRing3.shellcodeLen, NULL))) 
-        {
-            PLLOG("[-] ZwWriteVirtualMemory failed\n");
-            return PL_ERR_WRITE_REMOTE;
-        }
+        ZwWriteVirtualMemory(PLRing3.hTargetProcess, remoteBuf, PLRing3.shellcodeBytes, PLRing3.shellcodeLen, NULL);
         PLLOG("[+] Shellcode written\n");
     }
     return ExecuteRemote(remoteBuf);
@@ -985,11 +720,6 @@ PL_Result inject()
         case PL_METHOD_SHELLCODE:      
         {
             res = ShellcodeInject();
-            break;
-        }
-        default:
-        {
-            PLLOG("[!] Unknown injection method\n");
             break;
         }
         

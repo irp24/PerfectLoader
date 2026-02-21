@@ -88,22 +88,28 @@ static const char* PL_AllocMethodNames[] =
 
 typedef enum {
     PL_OK = 0,
-    PL_ERR_NO_DLL_PATH, PL_ERR_FILE_OPEN, PL_ERR_FILE_READ,
-    PL_ERR_PE_INVALID, PL_ERR_ALLOC_LOCAL, PL_ERR_ALLOC_REMOTE,
-    PL_ERR_RELOC_FAILED, PL_ERR_IAT_MODULE_NOT_FOUND, PL_ERR_IAT_FUNC_NOT_FOUND,
-    PL_ERR_WRITE_REMOTE, PL_ERR_THREAD_CREATE,
-    PL_ERR_HOOK_LOAD, PL_ERR_HOOK_PROC, PL_ERR_HOOK_INSTALL,
-    PL_ERR_NO_PROCESS, PL_ERR_NO_SHELLCODE,
+    PL_ERR_NO_DLL_PATH, 
+    PL_ERR_ALLOC_REMOTE,
+    PL_ERR_IAT_MODULE_NOT_FOUND, 
+    PL_ERR_IAT_FUNC_NOT_FOUND,
+    PL_ERR_THREAD_CREATE,
+    PL_ERR_HOOK_PROC, 
+    PL_ERR_NO_PROCESS, 
+    PL_ERR_PE_INVALID,
+    PL_ERR_NO_SHELLCODE,
 } PL_Result;
 
 static const char* PL_ResultStrings[] =
 {
-   "OK", "No DLL path specified", "Failed to open DLL file", "Failed to read DLL file",
-   "Invalid PE file", "Local memory allocation failed", "Remote memory allocation failed",
-   "Relocation fixup failed", "IAT: module not found", "IAT: function not found",
-   "WriteProcessMemory failed", "CreateRemoteThread failed",
-   "SetWindowsHookEx: LoadLibrary failed", "SetWindowsHookEx: export not found",
-   "SetWindowsHookEx: hook install failed", "No target process handle",
+   "OK", 
+   "No DLL path specified", 
+   "Remote memory allocation failed",
+   "IAT: module not found", 
+   "IAT: function not found",
+   "CreateRemoteThread failed",
+   "SetWindowsHookEx: export not found", 
+   "No target process handle",
+   "Invalid PE file",
    "No shellcode provided",
 };
 
