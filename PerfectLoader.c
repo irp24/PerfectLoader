@@ -171,17 +171,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
             if (method_sel == PL_METHOD_MANUAL_MAP)
             {
-                nk_layout_row_dynamic(ctx, 24, 1);
-                nk_checkbox_label(ctx, "Fix Relocations", &opt_fix_reloc);
-                nk_checkbox_label(ctx, "Fix IAT", &opt_fix_iat);
-
                 // IAT sub-options 
-                if (opt_fix_iat) {
-                    nk_layout_row_dynamic(ctx, 24, PL_IAT_COUNT);
-                    for (int i = 0; i < PL_IAT_COUNT; i++) {
-                        if (nk_option_label(ctx, PL_IATModeNames[i], iat_mode_sel == i))
-                            iat_mode_sel = i;
-                    }
+                nk_layout_row_dynamic(ctx, 24, PL_IAT_COUNT);
+                for (int i = 0; i < PL_IAT_COUNT; i++) {
+                    if (nk_option_label(ctx, PL_IATModeNames[i], iat_mode_sel == i))
+                        iat_mode_sel = i;
                 }
 
                 nk_layout_row_dynamic(ctx, 18, 1);

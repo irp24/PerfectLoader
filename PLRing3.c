@@ -498,7 +498,7 @@ PL_Result ManualMapInject()
     /* relocations */
     {
         uintptr_t delta = (uintptr_t)remoteBuf - (uintptr_t)nth->OptionalHeader.ImageBase;
-        if (PLRing3.fixRelocations && delta) 
+        if (delta) 
         {
             IMAGE_DATA_DIRECTORY brt = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
             IMAGE_BASE_RELOCATION* blk = (IMAGE_BASE_RELOCATION*)((uintptr_t)img + brt.VirtualAddress);
@@ -544,63 +544,60 @@ PL_Result ManualMapInject()
     }
 
     /* IAT */
-    if (PLRing3.fixIAT)
+    IMAGE_DATA_DIRECTORY impDir = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    IMAGE_IMPORT_DESCRIPTOR* id = (IMAGE_IMPORT_DESCRIPTOR*)((uintptr_t)img + impDir.VirtualAddress);
+
+    if (PLRing3.iatMode == PL_IAT_LOADLIBRARY) 
     {
-        IMAGE_DATA_DIRECTORY impDir = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-        IMAGE_IMPORT_DESCRIPTOR* id = (IMAGE_IMPORT_DESCRIPTOR*)((uintptr_t)img + impDir.VirtualAddress);
-
-        if (PLRing3.iatMode == PL_IAT_LOADLIBRARY) 
+        for (; id->Name; id++)
         {
-            for (; id->Name; id++)
+            char* mod = (char*)((uintptr_t)img + id->Name);
+            HMODULE hm = LoadLibraryA(mod);
+
+            PLLOG("  [+] %s -> %p\n", mod, (void*)hm);
+            IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)((uintptr_t)img + id->FirstThunk);
+            IMAGE_THUNK_DATA* orig = id->OriginalFirstThunk ? (IMAGE_THUNK_DATA*)((uintptr_t)img + id->OriginalFirstThunk) : thunk;
+            for (; orig->u1.AddressOfData; thunk++, orig++)
             {
-                char* mod = (char*)((uintptr_t)img + id->Name);
-                HMODULE hm = LoadLibraryA(mod);
+                PVOID fn = IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)
+                    ? GetProcAddress(hm, (LPCSTR)IMAGE_ORDINAL(orig->u1.Ordinal))
+                    : GetProcAddress(hm, ((IMAGE_IMPORT_BY_NAME*)((uintptr_t)img + (uintptr_t)orig->u1.AddressOfData))->Name);
 
-                PLLOG("  [+] %s -> %p\n", mod, (void*)hm);
-                IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)((uintptr_t)img + id->FirstThunk);
-                IMAGE_THUNK_DATA* orig = id->OriginalFirstThunk ? (IMAGE_THUNK_DATA*)((uintptr_t)img + id->OriginalFirstThunk) : thunk;
-                for (; orig->u1.AddressOfData; thunk++, orig++)
-                {
-                    PVOID fn = IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)
-                        ? GetProcAddress(hm, (LPCSTR)IMAGE_ORDINAL(orig->u1.Ordinal))
-                        : GetProcAddress(hm, ((IMAGE_IMPORT_BY_NAME*)((uintptr_t)img + (uintptr_t)orig->u1.AddressOfData))->Name);
-
-                    thunk->u1.Function = (ULONG_PTR)fn;
-                }
+                thunk->u1.Function = (ULONG_PTR)fn;
             }
-            PLLOG("[+] IAT fixed (LoadLibrary)\n");
         }
-        else if (PLRing3.iatMode == PL_IAT_READONLY)
+        PLLOG("[+] IAT fixed (LoadLibrary)\n");
+    }
+    else if (PLRing3.iatMode == PL_IAT_READONLY)
+    {
+        for (; id->Name; id++) 
         {
-            for (; id->Name; id++) 
+            char* mod = (char*)((uintptr_t)img + id->Name);
+            PVOID hm = RemoteGetModuleBaseFromPEB(PLRing3.hTargetProcess, mod);
+            if (!hm)
+            { 
+                PLLOG("  [-] %s not in remote PEB\n", mod);
+                res = PL_ERR_IAT_MODULE_NOT_FOUND;
+                goto done;
+            }
+            PLLOG("  [+] %s -> %p\n", mod, hm);
+            IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)((uintptr_t)img + id->FirstThunk);
+            IMAGE_THUNK_DATA* orig = id->OriginalFirstThunk ? (IMAGE_THUNK_DATA*)((uintptr_t)img + id->OriginalFirstThunk) : thunk;
+            for (; orig->u1.AddressOfData; thunk++, orig++) 
             {
-                char* mod = (char*)((uintptr_t)img + id->Name);
-                PVOID hm = RemoteGetModuleBaseFromPEB(PLRing3.hTargetProcess, mod);
-                if (!hm)
-                { 
-                    PLLOG("  [-] %s not in remote PEB\n", mod);
-                    res = PL_ERR_IAT_MODULE_NOT_FOUND;
+                PVOID fn = IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)
+                    ? RemoteCustomGetProcAddress(PLRing3.hTargetProcess, hm, (LPCSTR)IMAGE_ORDINAL(orig->u1.Ordinal))
+                    : RemoteCustomGetProcAddress(PLRing3.hTargetProcess, hm, ((IMAGE_IMPORT_BY_NAME*)((uintptr_t)img + (uintptr_t)orig->u1.AddressOfData))->Name);
+                if (!fn)
+                {
+                    PLLOG("    [-] Function not found in %s\n", mod);
+                    res = PL_ERR_IAT_FUNC_NOT_FOUND;
                     goto done;
                 }
-                PLLOG("  [+] %s -> %p\n", mod, hm);
-                IMAGE_THUNK_DATA* thunk = (IMAGE_THUNK_DATA*)((uintptr_t)img + id->FirstThunk);
-                IMAGE_THUNK_DATA* orig = id->OriginalFirstThunk ? (IMAGE_THUNK_DATA*)((uintptr_t)img + id->OriginalFirstThunk) : thunk;
-                for (; orig->u1.AddressOfData; thunk++, orig++) 
-                {
-                    PVOID fn = IMAGE_SNAP_BY_ORDINAL(orig->u1.Ordinal)
-                        ? RemoteCustomGetProcAddress(PLRing3.hTargetProcess, hm, (LPCSTR)IMAGE_ORDINAL(orig->u1.Ordinal))
-                        : RemoteCustomGetProcAddress(PLRing3.hTargetProcess, hm, ((IMAGE_IMPORT_BY_NAME*)((uintptr_t)img + (uintptr_t)orig->u1.AddressOfData))->Name);
-                    if (!fn)
-                    {
-                        PLLOG("    [-] Function not found in %s\n", mod);
-                        res = PL_ERR_IAT_FUNC_NOT_FOUND;
-                        goto done;
-                    }
-                    thunk->u1.Function = (ULONG_PTR)fn;
-                }
+                thunk->u1.Function = (ULONG_PTR)fn;
             }
-            PLLOG("[+] IAT fixed (ReadOnly)\n");
         }
+        PLLOG("[+] IAT fixed (ReadOnly)\n");
     }
 
     /* write to remote */

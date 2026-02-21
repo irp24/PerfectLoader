@@ -151,8 +151,6 @@ char export_name[256] = "";
 char shellcode[1024] = "";
 int  method_sel = PL_METHOD_MANUAL_MAP;
 int  iat_mode_sel = PL_IAT_LOADLIBRARY;
-int  opt_fix_iat = 1;
-int  opt_fix_reloc = 1;
 int  exec_method_sel = PL_EXEC_NT_CREATE_THREAD_EX;
 int  alloc_method_sel = PL_ALLOC_ZW_ALLOCATE;
 
@@ -304,8 +302,6 @@ void do_inject()
     strncpy(PLRing3.exportedMain, export_name, sizeof(PLRing3.exportedMain) - 1);
     PLRing3.method = (PL_InjectionMethod)method_sel;
     PLRing3.iatMode = (PL_IATMode)iat_mode_sel;
-    PLRing3.fixIAT = opt_fix_iat;
-    PLRing3.fixRelocations = opt_fix_reloc;
     PLRing3.execMethod = (PL_ExecMethod)exec_method_sel;
     PLRing3.allocMethod = (PL_AllocMethod)alloc_method_sel;
     PLRing3.hTargetProcess = hProc;

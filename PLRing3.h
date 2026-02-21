@@ -121,8 +121,6 @@ struct _PLRing3 {
     LPCSTR              windowName;
     PL_InjectionMethod  method;
     PL_IATMode          iatMode;
-    BOOL                fixIAT;
-    BOOL                fixRelocations;
     PL_ExecMethod       execMethod;
     PL_AllocMethod      allocMethod;
     HANDLE              hTargetProcess;
